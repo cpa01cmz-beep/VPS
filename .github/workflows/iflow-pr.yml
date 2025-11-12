@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'Optional: pull request number to review/apply'
+        description: 'Optional: pull request number to apply'
         required: false
         type: number
       trigger_apply:
@@ -43,12 +43,12 @@ jobs:
         run: |
           set -euo pipefail
           PR_NUMBER="${EVENT_PR:-}"
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]]; then PR_NUMBER="${INPUT_PR}"; fi
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]]; then PR_NUMBER="${INPUT_APPLY}"; fi
-          if [[ -z "${PR_NUMBER}" ]]; then echo "PR number is required"; exit 1; fi
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]] && PR_NUMBER="${INPUT_PR}"
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]] && PR_NUMBER="${INPUT_APPLY}"
+          [[ -z "${PR_NUMBER}" ]] && { echo "PR number is required"; exit 1; }
           echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
 
-      - name: Apply Changes from Full Discussion
+      - name: Apply feedback, resolve threads, push
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -60,104 +60,66 @@ jobs:
           debug: 'false'
           prompt: |
             ## Persona
-            You are an expert AI software engineer acting as a diligent repository maintainer.
+            Repository maintainer. Apply explicit PR feedback end-to-end.
 
-            ## Primary Goal
-            Analyze the entire pull request discussion (comments, reviews, suggestions) and apply only the code changes that are explicit, have clear consensus, and require no interpretation.
+            ## Objectives
+            - Parse entire PR discussion.
+            - Apply only explicit, small changes with clear consensus.
+            - Resolve addressed review threads.
+            - Re-request prior reviewers if changes were pushed.
+            - Attempt merge if all requirements satisfied; else enable auto-merge.
 
-            ## Step-by-Step Instructions
-            1. Review all PR comments and reviews. Identify concrete, unambiguous feedback with snippets or exact instructions.
-            2. Include only small, specific changes (<20 LOC) and typo-level fixes. Exclude design debates or ambiguous asks.
-            3. Apply each accepted change precisely to the correct file and line.
-            4. Create a separate commit per applied feedback with message: `fixup: Apply feedback from comment <comment_id>`.
-            5. Push commits to the PR source branch.
-            6. Post one summary comment listing applied changes and skipped items with reasons.
+            ## Procedure
+            1) Enumerate actionable comments:
+               - Include concrete diffs/snippets or exact line edits (<=20 LOC).
+               - Exclude abstract or disputed items.
+            2) For each actionable item:
+               - Patch exact lines.
+               - Commit as: `fixup: Apply feedback from comment <comment_id>`
+            3) Push to the PR source branch.
+            4) Resolve review threads you addressed:
+               - Use GraphQL `resolveReviewThread(threadId)` for each thread whose comments were fixed.
+            5) Labels and status:
+               - Remove labels like `needs-changes` if present, add/update `status/in-progress` as needed.
+               - If PR is draft but ready, mark ready (`gh pr ready $PR_NUMBER`).
+            6) Re-request reviewers:
+               - Get prior reviewers and request review again.
+            7) Merge decision:
+               - Fetch PR state: draft, mergeable, reviewDecision, statusCheckRollup.
+               - If `mergeable==MERGEABLE` AND (reviewDecision==APPROVED OR null) AND checks success:
+                 - `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
+               - Else:
+                 - `gh pr merge $PR_NUMBER --squash --auto --delete-branch`  # enable auto-merge
+            8) Post one summary comment listing:
+               - Applied items.
+               - Skipped items with reasons.
+               - Whether merged now or auto-merge enabled.
 
-            ## Strict Rules
-            - Idempotent: never re-apply already applied changes.
+            ## Rules
+            - Idempotent. Do not reapply existing edits.
+            - No config, deps, or CI file changes.
             - Keep code valid and style-consistent.
-            - Do not modify CI, security, deps, or workflow config.
-            - Do not add features or refactors beyond the feedback.
 
-      - name: Wait until PR is mergeable
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_NUMBER: ${{ env.PR_NUMBER }}
-          MAX_MINUTES: "120"     # batasi 2 jam
-          SLEEP_SECONDS: "20"
-        run: |
-          set -euo pipefail
-          echo "Waiting up to ${MAX_MINUTES} minutes for PR #${PR_NUMBER} to become mergeable..."
-          end=$(( $(date +%s) + ${MAX_MINUTES}*60 ))
-          while true; do
-            json="$(gh pr view "$PR_NUMBER" --json isDraft,mergeable,reviewDecision,mergeStateStatus,commits 2>/dev/null || true)"
-            if [[ -z "$json" ]]; then
-              echo "Failed to fetch PR state"; sleep "$SLEEP_SECONDS"; continue
-            fi
-
-            isDraft=$(jq -r '.isDraft' <<<"$json")
-            mergeable=$(jq -r '.mergeable // "UNKNOWN"' <<<"$json")
-            review=$(jq -r '.reviewDecision // "null"' <<<"$json")
-            check=$(jq -r '.commits[-1].commit.statusCheckRollup.state // "SUCCESS"' <<<"$json")
-            mergeState=$(jq -r '.mergeStateStatus // ""' <<<"$json")
-
-            echo "State: draft=$isDraft mergeable=$mergeable review=$review checks=$check mergeState=$mergeState"
-
-            ok_mergeable=false
-            [[ "$mergeable" == "MERGEABLE" ]] && ok_mergeable=true
-
-            ok_review=false
-            # treat null as OK when no review rules
-            [[ "$review" == "APPROVED" || "$review" == "null" ]] && ok_review=true
-
-            ok_checks=false
-            [[ "$check" == "SUCCESS" || "$check" == "null" ]] && ok_checks=true
-
-            not_blocked=true
-            [[ "$mergeState" == "BLOCKED" ]] && not_blocked=false
-
-            if [[ "$isDraft" == "false" && "$ok_mergeable" == true && "$ok_review" == true && "$ok_checks" == true && "$not_blocked" == true ]]; then
-              echo "Ready to merge."
-              break
-            fi
-
-            if (( $(date +%s) > end )); then
-              echo "Timeout while waiting for mergeability."
-              exit 1
-            fi
-            sleep "$SLEEP_SECONDS"
-          done
-
-      - name: Merge PR
+      - name: Ensure auto-merge or merge now
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PR_NUMBER: ${{ env.PR_NUMBER }}
         run: |
           set -euo pipefail
-          # Attempt to remove draft if still draft due to race
-          gh pr ready "$PR_NUMBER" || true
-          # Merge with squash and delete head branch
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation after checks and approvals."
-
-  notify_failure:
-    if: always() && (failure() || cancelled())
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_TOKEN }}
-          script: |
-            if (process.env.GITHUB_RUN_ATTEMPT === '1') {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `🚨 Workflow Failure: ${context.workflow}`,
-                body: `Failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                labels: ['automation-error']
-              });
-            }
-        env:
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          # Try a direct merge if already mergeable; else enable auto-merge. No waiting.
+          info="$(gh pr view "$PR_NUMBER" --json isDraft,mergeable,reviewDecision,commits 2>/dev/null || true)"
+          if [[ -n "$info" ]]; then
+            draft=$(jq -r '.isDraft' <<<"$info")
+            [[ "$draft" == "true" ]] && gh pr ready "$PR_NUMBER" || true
+            mergeable=$(jq -r '.mergeable // "UNKNOWN"' <<<"$info")
+            review=$(jq -r '.reviewDecision // "null"' <<<"$info")
+            checks=$(jq -r '.commits[-1].commit.statusCheckRollup.state // "SUCCESS"' <<<"$info")
+            if [[ "$mergeable" == "MERGEABLE" && ( "$review" == "APPROVED" || "$review" == "null" ) && ( "$checks" == "SUCCESS" || "$checks" == "null" ) ]]; then
+              gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation after applied feedback."
+            else
+              gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || \
+                gh pr comment "$PR_NUMBER" --body "Auto-merge could not be enabled. A maintainer may need to adjust branch protection or approvals."
+            fi
+          else
+            gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || true
+          fi
