@@ -4,11 +4,13 @@ This document outlines the recommended improvements for the repository's CI/CD w
 
 ## Current State
 
-The repository uses GitHub Actions for automating various tasks, including:
-- Free VPS research using Google Gemini
-- Repository maintenance
-- Documentation generation
-- Intelligence gathering
+The repository uses GitHub Actions for automating various tasks. The main workflows are:
+- `gemini-researcher.yml`: Researches free VPS offers and updates `free-vps.md`.
+- `iflow-maintenance.yml`: Performs scheduled maintenance (e.g., dependency updates).
+- `iflow-docs.yml`: Updates documentation on pushes to the `main` branch.
+- `iflow-intelijen.yml`: Gathers repository intelligence and creates new issues.
+- `iflow-issue.yml`: Attempts to automatically solve new issues.
+- `iflow-pr.yml`: Applies suggested changes from PR comments.
 
 The iFlow configuration is defined in `.github/iflow/config.yaml`.
 
