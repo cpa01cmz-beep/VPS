@@ -24,6 +24,7 @@ concurrency:
 # Naikkan ke write agar agent bisa re-run/disable workflow, upload SARIF, dsb.
 permissions:
   actions: write
+  workflows: write
   checks: write
   contents: write
   issues: write
