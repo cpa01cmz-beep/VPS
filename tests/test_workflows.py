@@ -3,8 +3,8 @@ from unittest.mock import patch, MagicMock
 import os
 import sys
 
-# Add the tests directory to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# The tests directory should be added to the Python path in the test runner configuration
+# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 class TestWorkflows(unittest.TestCase):
 
@@ -49,17 +49,20 @@ class TestWorkflows(unittest.TestCase):
 
     def test_iflow_maintenance_workflow(self):
         """Test the iFlow maintenance workflow."""
-        # This is a placeholder test. In a real scenario, you would test the actual workflow logic.
+        # TODO: Implement actual test logic for the maintenance workflow
+        # For now, we'll just verify the test framework is working
         self.assertTrue(True)
 
     def test_iflow_intelijen_workflow(self):
         """Test the iFlow intelijen workflow."""
-        # This is a placeholder test. In a real scenario, you would test the actual workflow logic.
+        # TODO: Implement actual test logic for the intelijen workflow
+        # For now, we'll just verify the test framework is working
         self.assertTrue(True)
 
     def test_gemini_researcher_workflow(self):
         """Test the Gemini researcher workflow."""
-        # This is a placeholder test. In a real scenario, you would test the actual workflow logic.
+        # TODO: Implement actual test logic for the researcher workflow
+        # For now, we'll just verify the test framework is working
         self.assertTrue(True)
 
 if __name__ == '__main__':
