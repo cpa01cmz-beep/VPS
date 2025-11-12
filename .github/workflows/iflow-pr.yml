@@ -5,12 +5,8 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: 'Optional: issue number to implement'
-        required: false
-        type: number
       pr_number:
-        description: 'Optional: pull request number to review'
+        description: 'Optional: pull request number to review/apply'
         required: false
         type: number
       trigger_apply:
@@ -24,9 +20,9 @@ jobs:
       (github.event_name == 'pull_request_review_comment' &&
        (contains(github.event.comment.body, '@iflow-cli /apply') ||
         github.event.comment.author_association == 'COLLABORATOR')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.trigger_apply)
+      (github.event_name == 'workflow_dispatch' && (inputs.trigger_apply || inputs.pr_number))
     concurrency:
-      group: ${{ github.workflow }}-apply-${{ github.event.pull_request.number || inputs.trigger_apply || github.run_id }}
+      group: ${{ github.workflow }}-apply-${{ github.event.pull_request.number || inputs.pr_number || inputs.trigger_apply || github.run_id }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
@@ -38,11 +34,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: "Apply Changes from Full Discussion"
+
+      - name: Resolve PR number
+        env:
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          INPUT_PR: ${{ inputs.pr_number }}
+          INPUT_APPLY: ${{ inputs.trigger_apply }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${EVENT_PR:-}"
+          if [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]]; then PR_NUMBER="${INPUT_PR}"; fi
+          if [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]]; then PR_NUMBER="${INPUT_APPLY}"; fi
+          if [[ -z "${PR_NUMBER}" ]]; then echo "PR number is required"; exit 1; fi
+          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Apply Changes from Full Discussion
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.trigger_apply }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
           REPOSITORY: ${{ github.repository }}
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
@@ -50,29 +60,84 @@ jobs:
           debug: 'false'
           prompt: |
             ## Persona
-            You are an expert AI software engineer acting as a diligent repository maintainer. Your purpose is to apply specific, actionable feedback from a pull request discussion directly to the codebase.
+            You are an expert AI software engineer acting as a diligent repository maintainer.
 
             ## Primary Goal
             Analyze the entire pull request discussion (comments, reviews, suggestions) and apply only the code changes that are explicit, have clear consensus, and require no interpretation.
 
             ## Step-by-Step Instructions
-            1.  **Synthesize Discussion:** Review all comments and code reviews associated with the pull request to identify actionable feedback.
-            2.  **Filter for Actionable Changes:** Isolate feedback that provides concrete code snippets or explicit line-by-line instructions.
-                - **INCLUDE:** Small, specific changes (e.g., fixing typos, renaming a variable, adjusting a function parameter) under 20 lines of code.
-                - **EXCLUDE:** Abstract feedback, design discussions, unresolved questions, or suggestions requiring architectural changes.
-            3.  **Verify Consensus:** Only apply a change if it is explicitly approved by the PR author or if it's a non-controversial fix (e.g., a typo). If there is any debate, do not apply the change.
-            4.  **Apply Changes:** For each actionable and approved change, apply it precisely to the relevant files.
-            5.  **Commit Changes:** Create a separate commit for each piece of feedback applied. The commit message must be formatted as: `fixup: Apply feedback from comment <comment_id>`
-            6.  **Push Branch:** Push all new commits to the pull request's source branch.
-            7.  **Summarize Actions:** Post a single, concise summary comment on the PR detailing the changes you have applied and which ones you skipped (and why).
+            1. Review all PR comments and reviews. Identify concrete, unambiguous feedback with snippets or exact instructions.
+            2. Include only small, specific changes (<20 LOC) and typo-level fixes. Exclude design debates or ambiguous asks.
+            3. Apply each accepted change precisely to the correct file and line.
+            4. Create a separate commit per applied feedback with message: `fixup: Apply feedback from comment <comment_id>`.
+            5. Push commits to the PR source branch.
+            6. Post one summary comment listing applied changes and skipped items with reasons.
 
             ## Strict Rules
-            - **Idempotency:** Never re-apply a change that has already been made.
-            - **Code Integrity:** Ensure all changes are applied correctly and do not break the surrounding code. The code must remain syntactically correct.
-            - **Style Consistency:** Adhere strictly to the existing coding style and conventions of the project.
-            - **Configuration Freeze:** NEVER modify configuration files, especially those related to CI/CD workflows, security, or project dependencies (e.g., `.github/`, `package.json`, `go.mod`).
-            - **Preserve Authorship:** Do not alter existing `git blame` information unnecessarily.
-            - **Focus:** Your sole task is applying feedback. Do not introduce new features or refactor code beyond the scope of the feedback.
+            - Idempotent: never re-apply already applied changes.
+            - Keep code valid and style-consistent.
+            - Do not modify CI, security, deps, or workflow config.
+            - Do not add features or refactors beyond the feedback.
+
+      - name: Wait until PR is mergeable
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          MAX_MINUTES: "120"     # batasi 2 jam
+          SLEEP_SECONDS: "20"
+        run: |
+          set -euo pipefail
+          echo "Waiting up to ${MAX_MINUTES} minutes for PR #${PR_NUMBER} to become mergeable..."
+          end=$(( $(date +%s) + ${MAX_MINUTES}*60 ))
+          while true; do
+            json="$(gh pr view "$PR_NUMBER" --json isDraft,mergeable,reviewDecision,mergeStateStatus,commits 2>/dev/null || true)"
+            if [[ -z "$json" ]]; then
+              echo "Failed to fetch PR state"; sleep "$SLEEP_SECONDS"; continue
+            fi
+
+            isDraft=$(jq -r '.isDraft' <<<"$json")
+            mergeable=$(jq -r '.mergeable // "UNKNOWN"' <<<"$json")
+            review=$(jq -r '.reviewDecision // "null"' <<<"$json")
+            check=$(jq -r '.commits[-1].commit.statusCheckRollup.state // "SUCCESS"' <<<"$json")
+            mergeState=$(jq -r '.mergeStateStatus // ""' <<<"$json")
+
+            echo "State: draft=$isDraft mergeable=$mergeable review=$review checks=$check mergeState=$mergeState"
+
+            ok_mergeable=false
+            [[ "$mergeable" == "MERGEABLE" ]] && ok_mergeable=true
+
+            ok_review=false
+            # treat null as OK when no review rules
+            [[ "$review" == "APPROVED" || "$review" == "null" ]] && ok_review=true
+
+            ok_checks=false
+            [[ "$check" == "SUCCESS" || "$check" == "null" ]] && ok_checks=true
+
+            not_blocked=true
+            [[ "$mergeState" == "BLOCKED" ]] && not_blocked=false
+
+            if [[ "$isDraft" == "false" && "$ok_mergeable" == true && "$ok_review" == true && "$ok_checks" == true && "$not_blocked" == true ]]; then
+              echo "Ready to merge."
+              break
+            fi
+
+            if (( $(date +%s) > end )); then
+              echo "Timeout while waiting for mergeability."
+              exit 1
+            fi
+            sleep "$SLEEP_SECONDS"
+          done
+
+      - name: Merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: |
+          set -euo pipefail
+          # Attempt to remove draft if still draft due to race
+          gh pr ready "$PR_NUMBER" || true
+          # Merge with squash and delete head branch
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation after checks and approvals."
 
   notify_failure:
     if: always() && (failure() || cancelled())
@@ -89,8 +154,8 @@ jobs:
               await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: `🚨 Workflow Failure: ${{ github.workflow }}`,
-                body: `Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+                title: `🚨 Workflow Failure: ${context.workflow}`,
+                body: `Failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
                 labels: ['automation-error']
               });
             }
