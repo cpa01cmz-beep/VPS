@@ -1,6 +1,6 @@
 # Free VPS Research
 
-This repository automatically researches and updates a list of free VPS offers using Google AI.
+This repository automatically researches and updates a list of free VPS offers using Google Gemini.
 
 ## How It Works
 
