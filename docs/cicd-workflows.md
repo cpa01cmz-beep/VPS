@@ -1,37 +1,71 @@
-# Documentation for CI/CD Workflows
+# CI/CD Workflows Orchestration
 
-This document provides an overview of the CI/CD workflows used in this repository.
+This document outlines the recommended improvements for the repository's CI/CD workflows orchestration.
 
-## iFlow - Solve Issue (`iflow -issue.yml`)
+## Current State
 
-This workflow is triggered when a new issue is opened or when a comment containing `/solve` is added to an issue. It uses the iFlow CLI to automatically solve the issue and create a pull request.
+The repository uses GitHub Actions for automating various tasks. The main workflows are:
+- `gemini-researcher.yml`: Researches free VPS offers and updates `free-vps.md`.
+- `iflow-maintenance.yml`: Performs scheduled maintenance (e.g., dependency updates).
+- `iflow-docs.yml`: Updates documentation on pushes to the `main` branch.
+- `iflow-intelijen.yml`: Gathers repository intelligence and creates new issues.
+- `iflow-issue.yml`: Attempts to automatically solve new issues.
+- `iflow-pr.yml`: Applies suggested changes from PR comments.
 
-## iFlow - Update Documentation (`iflow-docs.yml`)
+The iFlow configuration is defined in `.github/iflow/config.yaml`.
 
-This workflow runs on every push to the `main` branch. It updates the documentation on the `doc` branch and creates a pull request to merge the changes into `main`.
+## Recommended Improvements
 
-## iFlow - Apply PR Changes (`iflow-pr.yml`)
+### 1. Action Pinning
 
-This workflow is triggered when a pull request review comment is created or when manually triggered. It applies the changes suggested in the pull request comments.
+For security reasons, all GitHub Actions should be pinned to their SHA rather than version tags. This prevents unexpected changes when action owners update their code.
 
-## iFlow - Repository Maintenance (`iflow-maintenance.yml`)
+The following actions need to be updated:
 
-This workflow runs on a schedule (every weekday at 2:00 AM UTC). It performs repository maintenance tasks such as dependency updates and security audits.
+1. `actions/checkout@v5` → `actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8`
+2. `actions/upload-artifact@v5` → `actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4`
+3. `actions/download-artifact@v6` → `actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53`
+4. `actions/github-script@v8` → `actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd`
+5. `iflow-ai/iflow-cli-action@v2.1.0` → `iflow-ai/iflow-cli-action@5033255d7d73eab7dc4970f1ac8df7a93f30fdbc`
+6. `step-security/harden-runner@v2` → `step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2`
+7. `google-github-actions/run-gemini-cli@v0.1.14` → `google-github-actions/run-gemini-cli@f7db4b6f82ad0c3725cf4c98bdd93af80e22b4dc`
 
-## iFlow Intelijen (`iflow-intelijen.yml`)
+### 2. Concurrency Settings
 
-This workflow runs on a schedule (every Monday at 3:00 AM UTC) and gathers intelligence about the repository, such as open issues and pull request history. It then creates new issues based on this analysis.
+To improve efficiency and prevent conflicts, workflows should have appropriate concurrency settings.
 
-## Free VPS Research (`gemini-researcher.yml`)
+The following workflows need concurrency settings:
 
-This workflow runs on a schedule (every Monday at 3:00 AM UTC) and researches free VPS offers, updating the `free-vps.md` file.
+1. `iflow-docs.yml`:
+   ```yaml
+   concurrency:
+     group: ${{ github.workflow }}-${{ github.ref }}
+     cancel-in-progress: true
+   ```
 
-## GitHub Templates and Policies
+2. `iflow-maintenance.yml`:
+   ```yaml
+   concurrency:
+     group: ${{ github.workflow }}
+     cancel-in-progress: false
+   ```
 
-This repository includes several templates and policies to help with contributions:
+3. `iflow-intelijen.yml`:
+   ```yaml
+   concurrency:
+     group: ${{ github.workflow }}-${{ github.ref }}
+     cancel-in-progress: true
+   ```
 
-- **Issue Templates**: Standardized templates for bug reports, feature requests, and documentation updates
-- **Pull Request Template**: A checklist template to ensure quality pull requests
-- **Security Policy**: Guidelines for reporting security vulnerabilities
-- **CODEOWNERS**: Defines code ownership for automatic assignment of reviewers
-- **Dependabot Configuration**: Automated dependency updates for multiple ecosystems
+4. `gemini-researcher.yml`:
+   ```yaml
+   concurrency:
+     group: ${{ github.workflow }}
+     cancel-in-progress: false
+   ```
+
+## Implementation Notes
+
+These changes improve the security, efficiency, and maintainability of the repository's GitHub Actions workflows. They should be implemented manually by updating each workflow file.
+
+The workflow improvements were identified during the repository orchestration process but could not be automatically applied due to GitHub's security restrictions on workflow modifications.
