@@ -42,19 +42,18 @@ jobs:
         run: |
           set -euo pipefail
           PR_NUMBER=""
-          # 1) dari payload event
+          # dari payload event
           if jq -e '.pull_request.number' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
             PR_NUMBER="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
           fi
-          # 2) dari inputs
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]]; then PR_NUMBER="${INPUT_PR}"; fi
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]]; then PR_NUMBER="${INPUT_APPLY}"; fi
-          # 3) validasi
-          if [[ -z "${PR_NUMBER}" ]]; then
-            echo "PR number is required"; exit 1
-          fi
-          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
-          echo "REPOSITORY=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
+          # fallback dari inputs
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]] && PR_NUMBER="${INPUT_PR}"
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]] && PR_NUMBER="${INPUT_APPLY}"
+          [[ -z "${PR_NUMBER}" ]] && { echo "PR number is required"; exit 1; }
+          {
+            echo "PR_NUMBER=$PR_NUMBER"
+            echo "REPOSITORY=${GITHUB_REPOSITORY}"
+          } >> "$GITHUB_ENV"
 
       - name: Validate PR exists
         env:
@@ -62,9 +61,9 @@ jobs:
           PR_NUMBER: ${{ env.PR_NUMBER }}
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUMBER" --json number,title,headRefName,baseRefName >/dev/null
+          gh pr view "$PR_NUMBER" --json number,title >/dev/null
 
-      - name: Apply feedback, resolve threads, request reviews
+      - name: Apply feedback, resolve threads, and merge (agent)
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -72,72 +71,55 @@ jobs:
           REPOSITORY: ${{ env.REPOSITORY }}
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
-          timeout: '7200'
+          timeout: '5400'   # lebih efisien
           debug: 'false'
           prompt: |
             ## Persona
-            Repository maintainer. Perform end-to-end PR maintenance.
+              You are an expert AI software engineer acting as a diligent repository maintainer. Your purpose is to apply specific, actionable feedback from a pull request discussion directly to the codebase, work until pull request mergable.
 
             ## Context
-            - REPOSITORY: ${{ env.REPOSITORY }}
-            - PR_NUMBER: ${{ env.PR_NUMBER }}
+            - REPOSITORY=${{ env.REPOSITORY }}
+            - PR_NUMBER=${{ env.PR_NUMBER }}
+
+            ## Cost/Quota Constraints
+            - Minimize API calls and disk ops.
+            - Use targeted GraphQL/REST queries with specific fields and pagination cursors.
+            - Exit early if no actionable feedback.
 
             ## Objectives
-            - Parse the full PR conversation (reviews, comments, suggestions).
-            - Apply only explicit, consensus changes (≤20 LOC each).
-            - Commit one fix per comment: `fixup: Apply feedback from comment <comment_id>`.
-            - Resolve review threads you addressed.
-            - If ready, mark PR ready for review (undraft).
-            - Re-request previous reviewers.
+            1) Parse full PR conversation (reviews, review comments, regular comments).
+            2) Select only explicit, consensus changes.
+            3) Apply changes on PR head branch, one commit per comment:
+               - Commit message: `fixup: Apply feedback from comment <comment_id>`
+            4) Resolve addressed review threads.
+            5) If PR is draft but ready, mark ready.
+            6) Re-request previous reviewers if changes were pushed.
+            7) Merge policy:
+               - If now mergeable and checks/approvals satisfied: `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
+               - Else: enable auto-merge once: `gh pr merge $PR_NUMBER --squash --auto --delete-branch`
+               - Do not poll/wait. No loops.
 
-            ## Actions
-            1) Fetch PR metadata and discussion via GitHub API.
-            2) Extract actionable edits (exact snippets or line edits). Skip abstract/debated items.
-            3) Patch files, commit per item, push to the PR head branch.
-            4) Resolve fixed threads (GraphQL `resolveReviewThread`).
-            5) Post a single summary comment: applied vs skipped (with reasons).
-
-            ## Merge policy
-            - If mergeable now (no conflicts, approvals satisfied, checks green), merge:
-              `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
-            - Else, enable auto-merge so GitHub handles the wait:
-              `gh pr merge $PR_NUMBER --squash --auto --delete-branch`
+            ## Detailed Steps
+            - Fetch PR metadata: headRefName, headRepository, baseRefName, isCrossRepository.
+            - If head repo != base repo and push is not permitted:
+              - Post a concise comment with a unified diff patch block for the author to apply.
+              - Stop without errors.
+            - Checkout PR branch: `gh pr checkout $PR_NUMBER`.
+            - Configure git identity if needed:
+              `git config user.name "github-actions[bot]"`
+              `git config user.email "41898282+github-actions[bot]@users.noreply.github.com"`
+            - Build actionable list from comments:
+              INCLUDE concrete snippets or exact line edits; EXCLUDE ambiguous/disputed.
+              Ensure idempotency by diffing before applying.
+            - Apply patches precisely, run a quick syntax check or build when available (fast path only).
+            - Push commits.
+            - Resolve threads fixed via GraphQL `resolveReviewThread`.
+            - Post one summary comment:
+              - Applied items (with comment ids)
+              - Skipped items + short reasons
+              - Action taken: merged now | auto-merge enabled | patch posted due to fork perms
 
             ## Rules
-            - Idempotent edits. No CI/deps/config changes.
+            - No CI/deps/config edits.
             - Keep code valid and style-consistent.
-
-      - name: Attempt merge or enable auto-merge (no waiting)
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_NUMBER: ${{ env.PR_NUMBER }}
-        run: |
-          set -euo pipefail
-          # Final attempt without polling
-          gh pr ready "$PR_NUMBER" || true
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation." || \
-          gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || \
-          gh pr comment "$PR_NUMBER" --body "Auto-merge could not be enabled (branch protection or approval rules). A maintainer may need to adjust settings."
-
-  notify_failure:
-    if: always() && (failure() || cancelled())
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_TOKEN }}
-          script: |
-            if (process.env.GITHUB_RUN_ATTEMPT === '1') {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `🚨 Workflow Failure: ${context.workflow}`,
-                body: `Failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                labels: ['automation-error']
-              });
-            }
-        env:
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+            - Single pass. No retries, no waiting.
