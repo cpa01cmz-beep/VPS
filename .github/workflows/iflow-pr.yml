@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'Optional: pull request number to review/apply'
+        description: 'PR number to apply (optional)'
         required: false
         type: number
       trigger_apply:
-        description: 'Manually trigger apply changes for a PR'
+        description: 'Trigger apply for PR (optional)'
         required: false
         type: number
 
@@ -30,134 +30,96 @@ jobs:
       pull-requests: write
       issues: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Resolve PR number
         env:
-          EVENT_PR: ${{ github.event.pull_request.number }}
           INPUT_PR: ${{ inputs.pr_number }}
           INPUT_APPLY: ${{ inputs.trigger_apply }}
         run: |
           set -euo pipefail
-          PR_NUMBER="${EVENT_PR:-}"
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]]; then PR_NUMBER="${INPUT_PR}"; fi
-          if [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]]; then PR_NUMBER="${INPUT_APPLY}"; fi
-          if [[ -z "${PR_NUMBER}" ]]; then echo "PR number is required"; exit 1; fi
-          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+          PR_NUMBER=""
+          # dari payload event
+          if jq -e '.pull_request.number' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
+            PR_NUMBER="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          fi
+          # fallback dari inputs
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]] && PR_NUMBER="${INPUT_PR}"
+          [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]] && PR_NUMBER="${INPUT_APPLY}"
+          [[ -z "${PR_NUMBER}" ]] && { echo "PR number is required"; exit 1; }
+          {
+            echo "PR_NUMBER=$PR_NUMBER"
+            echo "REPOSITORY=${GITHUB_REPOSITORY}"
+          } >> "$GITHUB_ENV"
 
-      - name: Apply Changes from Full Discussion
+      - name: Validate PR exists
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --json number,title >/dev/null
+
+      - name: Apply feedback, resolve threads, and merge (agent)
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           PR_NUMBER: ${{ env.PR_NUMBER }}
-          REPOSITORY: ${{ github.repository }}
+          REPOSITORY: ${{ env.REPOSITORY }}
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
-          timeout: '7200'
+          timeout: '5400'   # lebih efisien
           debug: 'false'
           prompt: |
             ## Persona
-            You are an expert AI software engineer acting as a diligent repository maintainer.
+              You are an expert AI software engineer acting as a diligent repository maintainer. Your purpose is to apply specific, actionable feedback from a pull request discussion directly to the codebase, work until pull request mergable.
 
-            ## Primary Goal
-            Analyze the entire pull request discussion (comments, reviews, suggestions) and apply only the code changes that are explicit, have clear consensus, and require no interpretation.
+            ## Context
+            - REPOSITORY=${{ env.REPOSITORY }}
+            - PR_NUMBER=${{ env.PR_NUMBER }}
 
-            ## Step-by-Step Instructions
-            1. Review all PR comments and reviews. Identify concrete, unambiguous feedback with snippets or exact instructions.
-            2. Include only small, specific changes (<20 LOC) and typo-level fixes. Exclude design debates or ambiguous asks.
-            3. Apply each accepted change precisely to the correct file and line.
-            4. Create a separate commit per applied feedback with message: `fixup: Apply feedback from comment <comment_id>`.
-            5. Push commits to the PR source branch.
-            6. Post one summary comment listing applied changes and skipped items with reasons.
+            ## Cost/Quota Constraints
+            - Minimize API calls and disk ops.
+            - Use targeted GraphQL/REST queries with specific fields and pagination cursors.
+            - Exit early if no actionable feedback.
 
-            ## Strict Rules
-            - Idempotent: never re-apply already applied changes.
+            ## Objectives
+            1) Parse full PR conversation (reviews, review comments, regular comments).
+            2) Select only explicit, consensus changes.
+            3) Apply changes on PR head branch, one commit per comment:
+               - Commit message: `fixup: Apply feedback from comment <comment_id>`
+            4) Resolve addressed review threads.
+            5) If PR is draft but ready, mark ready.
+            6) Re-request previous reviewers if changes were pushed.
+            7) Merge policy:
+               - If now mergeable and checks/approvals satisfied: `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
+               - Else: enable auto-merge once: `gh pr merge $PR_NUMBER --squash --auto --delete-branch`
+               - Do not poll/wait. No loops.
+
+            ## Detailed Steps
+            - Fetch PR metadata: headRefName, headRepository, baseRefName, isCrossRepository.
+            - If head repo != base repo and push is not permitted:
+              - Post a concise comment with a unified diff patch block for the author to apply.
+              - Stop without errors.
+            - Checkout PR branch: `gh pr checkout $PR_NUMBER`.
+            - Configure git identity if needed:
+              `git config user.name "github-actions[bot]"`
+              `git config user.email "41898282+github-actions[bot]@users.noreply.github.com"`
+            - Build actionable list from comments:
+              INCLUDE concrete snippets or exact line edits; EXCLUDE ambiguous/disputed.
+              Ensure idempotency by diffing before applying.
+            - Apply patches precisely, run a quick syntax check or build when available (fast path only).
+            - Push commits.
+            - Resolve threads fixed via GraphQL `resolveReviewThread`.
+            - Post one summary comment:
+              - Applied items (with comment ids)
+              - Skipped items + short reasons
+              - Action taken: merged now | auto-merge enabled | patch posted due to fork perms
+
+            ## Rules
+            - No CI/deps/config edits.
             - Keep code valid and style-consistent.
-            - Do not modify CI, security, deps, or workflow config.
-            - Do not add features or refactors beyond the feedback.
-
-      - name: Wait until PR is mergeable
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_NUMBER: ${{ env.PR_NUMBER }}
-          MAX_MINUTES: "120"     # batasi 2 jam
-          SLEEP_SECONDS: "20"
-        run: |
-          set -euo pipefail
-          echo "Waiting up to ${MAX_MINUTES} minutes for PR #${PR_NUMBER} to become mergeable..."
-          end=$(( $(date +%s) + ${MAX_MINUTES}*60 ))
-          while true; do
-            json="$(gh pr view "$PR_NUMBER" --json isDraft,mergeable,reviewDecision,mergeStateStatus,commits 2>/dev/null || true)"
-            if [[ -z "$json" ]]; then
-              echo "Failed to fetch PR state"; sleep "$SLEEP_SECONDS"; continue
-            fi
-
-            isDraft=$(jq -r '.isDraft' <<<"$json")
-            mergeable=$(jq -r '.mergeable // "UNKNOWN"' <<<"$json")
-            review=$(jq -r '.reviewDecision // "null"' <<<"$json")
-            check=$(jq -r '.commits[-1].commit.statusCheckRollup.state // "SUCCESS"' <<<"$json")
-            mergeState=$(jq -r '.mergeStateStatus // ""' <<<"$json")
-
-            echo "State: draft=$isDraft mergeable=$mergeable review=$review checks=$check mergeState=$mergeState"
-
-            ok_mergeable=false
-            [[ "$mergeable" == "MERGEABLE" ]] && ok_mergeable=true
-
-            ok_review=false
-            # treat null as OK when no review rules
-            [[ "$review" == "APPROVED" || "$review" == "null" ]] && ok_review=true
-
-            ok_checks=false
-            [[ "$check" == "SUCCESS" || "$check" == "null" ]] && ok_checks=true
-
-            not_blocked=true
-            [[ "$mergeState" == "BLOCKED" ]] && not_blocked=false
-
-            if [[ "$isDraft" == "false" && "$ok_mergeable" == true && "$ok_review" == true && "$ok_checks" == true && "$not_blocked" == true ]]; then
-              echo "Ready to merge."
-              break
-            fi
-
-            if (( $(date +%s) > end )); then
-              echo "Timeout while waiting for mergeability."
-              exit 1
-            fi
-            sleep "$SLEEP_SECONDS"
-          done
-
-      - name: Merge PR
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_NUMBER: ${{ env.PR_NUMBER }}
-        run: |
-          set -euo pipefail
-          # Attempt to remove draft if still draft due to race
-          gh pr ready "$PR_NUMBER" || true
-          # Merge with squash and delete head branch
-          gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation after checks and approvals."
-
-  notify_failure:
-    if: always() && (failure() || cancelled())
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GH_TOKEN }}
-          script: |
-            if (process.env.GITHUB_RUN_ATTEMPT === '1') {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `🚨 Workflow Failure: ${context.workflow}`,
-                body: `Failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                labels: ['automation-error']
-              });
-            }
-        env:
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+            - Single pass. No retries, no waiting.
