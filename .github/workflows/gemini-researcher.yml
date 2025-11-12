@@ -1,4 +1,4 @@
-name: "Free VPS Research + Self‑Improvement"
+name: "Free VPS Research + Self‑Improve"
 
 on:
   workflow_dispatch: {}
@@ -14,80 +14,77 @@ jobs:
   research:
     runs-on: ubuntu-latest
     env:
-      OUTPUT_FILE: "free‑vps.md"
-      SELF_IMPROVE_FILE: "self_improve.md"
-      BRANCH_PREFIX: "automated/free-vps-update"
+      OUTPUT_FILE: free-vps.md
+      SELF_IMPROVE_FILE: self_improve.md
+      BRANCH_PREFIX: automated/free-vps-update
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Prepare prompts
+      - name: Prepare prompt file
         run: |
           mkdir -p .github/gemini/prompts
           cat > .github/gemini/prompts/search_free_vps.prompt <<'PROMPT'
-You are a web researcher. Task: search for credible offers of free VPS (free‑tier, trial, developer credits, academic/community VPS).  
+You are a web researcher. Task: search for credible offers of free VPS (free tier, trial, developer credits, community VPS).
 Output as Markdown with:
-- Date: YYYY‑MM‑DD  
-- Summary header  
-- List each offer: Name, URL, what’s free, limits, evidence links/quotes, reliability score (1‑5), verification notes  
-- Research‑log: search queries and visited URLs  
+- Date: YYYY‑MM‑DD
+- Summary header
+- List each offer: Name, URL, free offer details, limits, evidence (links/quotes), reliability score (1‑5), verification notes
+- Research‑log: search queries used, visited URLs
 If none found, explain why and suggest next steps.
 PROMPT
 
       - name: Run Gemini CLI – Research free VPS
         id: run_research
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@v0.1.14
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           prompt: |
             $(cat .github/gemini/prompts/search_free_vps.prompt)
-          gemini_model: "gemni-2.5-flash-lite"
           upload_artifacts: false
-        env:
-          # environment variable if needed
-          OUTPUT_PATH: ${{ env.OUTPUT_FILE }}
-        run: |
-          echo "${{ steps.run_research.outputs.summary }}" > "${OUTPUT_PATH}"
 
-      - name: Run Gemini CLI – Self‑improve analysis
+      - name: Write research output to file
+        run: |
+          echo "${{ steps.run_research.outputs.summary }}" > ${{ env.OUTPUT_FILE }}
+
+      - name: Run Gemini CLI – Self‑Improve analysis
         id: run_self_improve
-        uses: google-github-actions/run-gemini-cli@v0
+        uses: google-github-actions/run-gemini-cli@v0.1.14
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           prompt: |
-            You are an analyst. Read the following markdown report (free‑vps.md) and output:
-            1) Concrete improvements to the research method (queries, sources, verification)  
-            2) Suggested prompt variants for next run (2‑3, ≤50 words each)  
-            3) Proposed automated test (shell/regex) to detect low‑quality results.
+            You are an analyst. Read the following markdown report and produce:
+            1) Concrete improvements to the research method (queries, sources, verification)
+            2) Suggested prompt variants (2‑3, ≤50 words each) for next run
+            3) Proposed automated test (shell/regex) to detect low‑quality output.
             Report content:
             $(cat ${{ env.OUTPUT_FILE }})
-          gemini_model: "gemni-2.5-flash-lite"
           upload_artifacts: false
-        env:
-          OUTPUT_PATH2: ${{ env.SELF_IMPROVE_FILE }}
+
+      - name: Write self‑improve output to file
         run: |
-          echo "${{ steps.run_self_improve.outputs.summary }}" > "${OUTPUT_PATH2}"
+          echo "${{ steps.run_self_improve.outputs.summary }}" > ${{ env.SELF_IMPROVE_FILE }}
 
       - name: Preview output files
         run: |
-          echo "=== ${OUTPUT_FILE} ==="
-          head -n 50 "${OUTPUT_FILE}" || true
-          echo "=== ${SELF_IMPROVE_FILE} ==="
-          head -n 50 "${SELF_IMPROVE_FILE}" || true
+          echo "=== ${{ env.OUTPUT_FILE }} ==="
+          head -n 50 ${{ env.OUTPUT_FILE }} || true
+          echo "=== ${{ env.SELF_IMPROVE_FILE }} ==="
+          head -n 50 ${{ env.SELF_IMPROVE_FILE }} || true
 
       - name: Configure Git user
         run: |
           git config user.name "github‑actions[bot]"
           git config user.email "github‑actions[bot]@users.noreply.github.com"
 
-      - name: Commit & Push if changed
+      - name: Commit & push changes
         id: commit_push
         run: |
-          BRANCH="${BRANCH_PREFIX}-$(date +%Y%m%d%H%M%S)"
+          BRANCH="${{ env.BRANCH_PREFIX }}-$(date +%Y%m%d%H%M%S)"
           git checkout -b "$BRANCH"
-          git add "${OUTPUT_FILE}" "${SELF_IMPROVE_FILE}"
+          git add ${{ env.OUTPUT_FILE }} ${{ env.SELF_IMPROVE_FILE }}
           if git diff --cached --quiet; then
             echo "No changes to commit."
             echo "::set-output name=changed::false"
@@ -108,9 +105,9 @@ PROMPT
           title: "[Automated] Update free‑VPS research + self‑improve"
           body: |
             This PR contains:
-            - Updated `${OUTPUT_FILE}` with latest research results  
-            - Updated `${SELF_IMPROVE_FILE}` with analysis & suggestions  
-            Review, verify the offers list and merge if acceptable.
+            - Updated `${{ env.OUTPUT_FILE }}`
+            - Updated `${{ env.SELF_IMPROVE_FILE }}`
+            Please review and merge if acceptable.
           labels: automated, bot
 
       - name: Create Self‑Improve Issue
@@ -119,14 +116,14 @@ PROMPT
         with:
           script: |
             const fs = require('fs');
-            const md = fs.readFileSync(process.env.SELF_IMPROVE_FILE, 'utf8');
+            const md = fs.readFileSync('${{ env.SELF_IMPROVE_FILE }}','utf8');
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: "[Auto] Self‑Improve suggestions – free‑VPS research",
-              body: `Self‑improvement suggestions generated:\n\n${md}`,
+              body: `Generated suggestions:\n\n${md}`,
               labels: ["self‑improve","automated"]
             });
 
-      - name: Finish
+      - name: Done
         run: echo "Workflow completed."
