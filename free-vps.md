@@ -1,23 +1,15 @@
-I have created a Markdown file named  with the requested information. Here is the content:
+2025-11-12
 
-# Free VPS Offers
+### Public Free VPS Offers
 
-**Date:** 2025-11-12
-
-| Name | URL | What is Free | Limits | Reliability (1-5) |
-|---|---|---|---|---|
-| Kamatera | https://www.kamatera.com/ | 30-day trial | 00 credit, customizable server | 4 |
-| IONOS | https://www.ionos.com/ | 30-day risk-free trial | Scalable resources | 4 |
-| ScalaHosting | https://www.scalahosting.com/ | 30-day money-back guarantee | Customizable managed and unmanaged cloud VPS | 4 |
-| DigitalOcean | https://www.digitalocean.com/ | 60-day free trial | 00 in credits | 5 |
-| Cloudways | https://www.cloudways.com/ | 3-day free trial | Managed VPS on major cloud platforms | 4 |
-| VPSServer | https://www.vpsserver.com/ | 30-day trial | 00 free credit, various products | 3 |
-| Vultr | https://www.vultr.com/ | Free trial credits | 00 or 00 in free credit | 5 |
-| Linode (Akamai) | https://www.linode.com/ | 30-day trial | 00 free credit | 5 |
-| AccuWebHosting | https://www.accuwebhosting.com/ | 30-day free trial | Windows VPS hosting with various configurations | 3 |
-| x10Hosting | https://x10hosting.com/ | Free cloud-based hosting | Unlimited storage and bandwidth, may lack advanced VPS features | 2 |
-| GigaRocket | https://gigarocket.net/ | Free VPS hosting | - | 2 |
-| InstaFree | https://instafree.com/ | Free VPS hosting | - | 2 |
-| WoomHost | https://woomhost.com/ | Free VPS hosting | - | 2 |
-| Microsoft Azure | https://azure.microsoft.com/ | Free tier | Limitations on RAM, storage, and uptime | 5 |
-| Google Cloud Platform | https://cloud.google.com/ | Free tier | Limitations on RAM, storage, and uptime | 5 |
+| Name | URL | What is Free | Limits | Reliability Score (1-5) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Kamatera** | [kamatera.com](https://www.kamatera.com/) | 30-day free trial with 00 credit | 30 days or 00 credit | 4 |
+| **DigitalOcean** | [digitalocean.com](https://www.digitalocean.com/) | 60-day trial with 00 in credits | 60 days or 00 credit | 5 |
+| **IONOS** | [ionos.com](https://www.ionos.com/) | One-month free VPS trial | 1 month | 4 |
+| **Cloudways** | [cloudways.com](https://www.cloudways.com/) | 3-day trial | 3 days | 4 |
+| **Vultr** | [vultr.com](https://www.vultr.com/) | Free credits for trial | Credit amount varies | 4 |
+| **GratisVPS.net** | [gratisvps.net](https://gratisvps.net/) | Free VPS for 120 days (beta) | 120 days | 2 |
+| **Google Cloud** | [cloud.google.com/free](https://cloud.google.com/free) | Free Tier with limitations | Limited resources (e.g., RAM, storage) | 5 |
+| **Oracle Cloud** | [oracle.com/cloud/free](https://www.oracle.com/cloud/free/) | Always Free resources | Specific instance types and resource limits | 5 |
+| **VPSie** | [vpsie.com](https://vpsie.com/) | 1-month free trial | 1 month, 1GB RAM, 10GB SSD, 1TB bandwidth | 3 |
