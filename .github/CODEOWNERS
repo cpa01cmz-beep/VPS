@@ -1,2 +1,22 @@
 # Code owners for the repository
+# This file assigns ownership for code review and notifications
+
+# Default owner for all files
 * @cpa01cmz-beep
+
+# GitHub Actions workflows
+.github/workflows/* @cpa01cmz-beep
+
+# Documentation
+README.md @cpa01cmz-beep
+docs/* @cpa01cmz-beep
+
+# Configuration files
+.github/dependabot.yml @cpa01cmz-beep
+.github/CODEOWNERS @cpa01cmz-beep
+.github/SECURITY.md @cpa01cmz-beep
+.github/labeler.yml @cpa01cmz-beep
+
+# Issue and PR templates
+.github/ISSUE_TEMPLATE/* @cpa01cmz-beep
+.github/PULL_REQUEST_TEMPLATE.md @cpa01cmz-beep
