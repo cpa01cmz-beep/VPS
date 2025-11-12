@@ -1,18 +1,14 @@
-# VPS
+# Free VPS Research
 
-This repository contains information about free VPS offers.
+This repository automatically researches and updates a list of free VPS offers using Google Gemini.
 
-## Workflows
+## How It Works
 
-This repository uses GitHub Actions for automation. The following workflows are defined:
+1. A GitHub Actions workflow runs weekly to search for free VPS offers.
+2. The search results are written to [`free-vps.md`](free-vps.md).
+3. The file is automatically committed and pushed if there are changes.
 
-- `gemini-researcher.yml`: Researches and updates the free VPS list.
-- `iflow -issue.yml`: Solves GitHub issues.
-- `iflow-docs.yml`: Updates documentation.
-- `iflow-intelijen.yml`: Performs repository maintenance.
-- `iflow-maintenance.yml`: Maintains the repository.
-- `iflow-pr.yml`: Applies PR changes.
+## Contributing
 
-## Free VPS Offers
+If you'd like to contribute to this project, please submit a pull request with your changes. You can help improve the workflow, add new features, or fix issues. Check the project's issue tracker for ideas on how to contribute.
 
-The `free-vps.md` file contains a list of free VPS offers.
