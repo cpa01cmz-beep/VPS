@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this project, please report it by emailing the maintainers at [maintainer-email@example.com]. 
+If you discover a security vulnerability in this project, please report it privately by using the 'Report a vulnerability' button on the 'Security' tab of this repository.
 
 Please include the following information in your report:
 - Description of the vulnerability
