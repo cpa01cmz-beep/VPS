@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'Optional: pull request number to apply'
+        description: 'PR number to apply (optional)'
         required: false
         type: number
       trigger_apply:
-        description: 'Manually trigger apply changes for a PR'
+        description: 'Trigger apply for PR (optional)'
         required: false
         type: number
 
@@ -30,96 +30,114 @@ jobs:
       pull-requests: write
       issues: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Resolve PR number
         env:
-          EVENT_PR: ${{ github.event.pull_request.number }}
           INPUT_PR: ${{ inputs.pr_number }}
           INPUT_APPLY: ${{ inputs.trigger_apply }}
         run: |
           set -euo pipefail
-          PR_NUMBER="${EVENT_PR:-}"
-          [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]] && PR_NUMBER="${INPUT_PR}"
-          [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]] && PR_NUMBER="${INPUT_APPLY}"
-          [[ -z "${PR_NUMBER}" ]] && { echo "PR number is required"; exit 1; }
+          PR_NUMBER=""
+          # 1) dari payload event
+          if jq -e '.pull_request.number' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
+            PR_NUMBER="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          fi
+          # 2) dari inputs
+          if [[ -z "${PR_NUMBER}" && -n "${INPUT_PR:-}" ]]; then PR_NUMBER="${INPUT_PR}"; fi
+          if [[ -z "${PR_NUMBER}" && -n "${INPUT_APPLY:-}" ]]; then PR_NUMBER="${INPUT_APPLY}"; fi
+          # 3) validasi
+          if [[ -z "${PR_NUMBER}" ]]; then
+            echo "PR number is required"; exit 1
+          fi
           echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+          echo "REPOSITORY=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
 
-      - name: Apply feedback, resolve threads, push
+      - name: Validate PR exists
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --json number,title,headRefName,baseRefName >/dev/null
+
+      - name: Apply feedback, resolve threads, request reviews
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           PR_NUMBER: ${{ env.PR_NUMBER }}
-          REPOSITORY: ${{ github.repository }}
+          REPOSITORY: ${{ env.REPOSITORY }}
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
           timeout: '7200'
           debug: 'false'
           prompt: |
             ## Persona
-            Repository maintainer. Apply explicit PR feedback end-to-end.
+            Repository maintainer. Perform end-to-end PR maintenance.
+
+            ## Context
+            - REPOSITORY: ${{ env.REPOSITORY }}
+            - PR_NUMBER: ${{ env.PR_NUMBER }}
 
             ## Objectives
-            - Parse entire PR discussion.
-            - Apply only explicit, small changes with clear consensus.
-            - Resolve addressed review threads.
-            - Re-request prior reviewers if changes were pushed.
-            - Attempt merge if all requirements satisfied; else enable auto-merge.
+            - Parse the full PR conversation (reviews, comments, suggestions).
+            - Apply only explicit, consensus changes (≤20 LOC each).
+            - Commit one fix per comment: `fixup: Apply feedback from comment <comment_id>`.
+            - Resolve review threads you addressed.
+            - If ready, mark PR ready for review (undraft).
+            - Re-request previous reviewers.
 
-            ## Procedure
-            1) Enumerate actionable comments:
-               - Include concrete diffs/snippets or exact line edits (<=20 LOC).
-               - Exclude abstract or disputed items.
-            2) For each actionable item:
-               - Patch exact lines.
-               - Commit as: `fixup: Apply feedback from comment <comment_id>`
-            3) Push to the PR source branch.
-            4) Resolve review threads you addressed:
-               - Use GraphQL `resolveReviewThread(threadId)` for each thread whose comments were fixed.
-            5) Labels and status:
-               - Remove labels like `needs-changes` if present, add/update `status/in-progress` as needed.
-               - If PR is draft but ready, mark ready (`gh pr ready $PR_NUMBER`).
-            6) Re-request reviewers:
-               - Get prior reviewers and request review again.
-            7) Merge decision:
-               - Fetch PR state: draft, mergeable, reviewDecision, statusCheckRollup.
-               - If `mergeable==MERGEABLE` AND (reviewDecision==APPROVED OR null) AND checks success:
-                 - `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
-               - Else:
-                 - `gh pr merge $PR_NUMBER --squash --auto --delete-branch`  # enable auto-merge
-            8) Post one summary comment listing:
-               - Applied items.
-               - Skipped items with reasons.
-               - Whether merged now or auto-merge enabled.
+            ## Actions
+            1) Fetch PR metadata and discussion via GitHub API.
+            2) Extract actionable edits (exact snippets or line edits). Skip abstract/debated items.
+            3) Patch files, commit per item, push to the PR head branch.
+            4) Resolve fixed threads (GraphQL `resolveReviewThread`).
+            5) Post a single summary comment: applied vs skipped (with reasons).
+
+            ## Merge policy
+            - If mergeable now (no conflicts, approvals satisfied, checks green), merge:
+              `gh pr merge $PR_NUMBER --squash --delete-branch --body "Merged after applying explicit feedback."`
+            - Else, enable auto-merge so GitHub handles the wait:
+              `gh pr merge $PR_NUMBER --squash --auto --delete-branch`
 
             ## Rules
-            - Idempotent. Do not reapply existing edits.
-            - No config, deps, or CI file changes.
+            - Idempotent edits. No CI/deps/config changes.
             - Keep code valid and style-consistent.
 
-      - name: Ensure auto-merge or merge now
+      - name: Attempt merge or enable auto-merge (no waiting)
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PR_NUMBER: ${{ env.PR_NUMBER }}
         run: |
           set -euo pipefail
-          # Try a direct merge if already mergeable; else enable auto-merge. No waiting.
-          info="$(gh pr view "$PR_NUMBER" --json isDraft,mergeable,reviewDecision,commits 2>/dev/null || true)"
-          if [[ -n "$info" ]]; then
-            draft=$(jq -r '.isDraft' <<<"$info")
-            [[ "$draft" == "true" ]] && gh pr ready "$PR_NUMBER" || true
-            mergeable=$(jq -r '.mergeable // "UNKNOWN"' <<<"$info")
-            review=$(jq -r '.reviewDecision // "null"' <<<"$info")
-            checks=$(jq -r '.commits[-1].commit.statusCheckRollup.state // "SUCCESS"' <<<"$info")
-            if [[ "$mergeable" == "MERGEABLE" && ( "$review" == "APPROVED" || "$review" == "null" ) && ( "$checks" == "SUCCESS" || "$checks" == "null" ) ]]; then
-              gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation after applied feedback."
-            else
-              gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || \
-                gh pr comment "$PR_NUMBER" --body "Auto-merge could not be enabled. A maintainer may need to adjust branch protection or approvals."
-            fi
-          else
-            gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || true
-          fi
+          # Final attempt without polling
+          gh pr ready "$PR_NUMBER" || true
+          gh pr merge "$PR_NUMBER" --squash --delete-branch --body "Merged by automation." || \
+          gh pr merge "$PR_NUMBER" --squash --auto --delete-branch || \
+          gh pr comment "$PR_NUMBER" --body "Auto-merge could not be enabled (branch protection or approval rules). A maintainer may need to adjust settings."
+
+  notify_failure:
+    if: always() && (failure() || cancelled())
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            if (process.env.GITHUB_RUN_ATTEMPT === '1') {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🚨 Workflow Failure: ${context.workflow}`,
+                body: `Failed run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                labels: ['automation-error']
+              });
+            }
+        env:
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
