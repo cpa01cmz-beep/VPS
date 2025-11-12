@@ -25,3 +25,13 @@ This workflow runs on a schedule (every Monday at 3:00 AM UTC) and gathers intel
 ## Free VPS Research (`gemini-researcher.yml`)
 
 This workflow runs on a schedule (every Monday at 3:00 AM UTC) and researches free VPS offers, updating the `free-vps.md` file.
+
+## GitHub Templates and Policies
+
+This repository includes several templates and policies to help with contributions:
+
+- **Issue Templates**: Standardized templates for bug reports, feature requests, and documentation updates
+- **Pull Request Template**: A checklist template to ensure quality pull requests
+- **Security Policy**: Guidelines for reporting security vulnerabilities
+- **CODEOWNERS**: Defines code ownership for automatic assignment of reviewers
+- **Dependabot Configuration**: Automated dependency updates for multiple ecosystems
