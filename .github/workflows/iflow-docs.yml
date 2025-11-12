@@ -15,60 +15,111 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
-      - name: "Update Documentation"
+          fetch-depth: 0
+
+      - name: Prepare 'doc' branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Pastikan history main terbaru ada
+          git fetch origin main --depth=2
+          MAIN_SHA=$(git rev-list origin/main -n 1)
+          PREV_SHA=$(git rev-list origin/main -n 2 | tail -n1 || echo "")
+
+          # Buat atau update branch 'doc'
+          if git ls-remote --exit-code --heads origin doc >/dev/null 2>&1; then
+            git fetch origin doc:refs/remotes/origin/doc
+            git checkout -B doc origin/doc
+            # Selaraskan dengan main agar basis terkini
+            git merge --no-edit origin/main || true
+          else
+            git checkout -b doc origin/main
+            git push -u origin doc
+          fi
+
+          {
+            echo "MAIN_SHA=$MAIN_SHA"
+            echo "PREV_SHA=$PREV_SHA"
+            echo "COMMIT_URL=${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+            echo "REPOSITORY=${{ github.repository }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Update Documentation with iFlow
         uses: iflow-ai/iflow-cli-action@v2.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          MAIN_SHA: ${{ env.MAIN_SHA }}
+          PREV_SHA: ${{ env.PREV_SHA }}
         with:
           api_key: ${{ secrets.IFLOW_API_KEY }}
           timeout: '3600'
           debug: 'false'
           prompt: |
             ## Persona
-            You are an expert AI Technical Writer. Your responsibility is to ensure the project's documentation is always accurate and up-to-date by analyzing code changes pushed to the main branch.
+            You are an expert AI Technical Writer. Analyze code changes in main and update documentation on the current branch (doc).
 
-            ## Primary Goal
-            Analyze the most recent commit to the main branch, determine if it impacts documentation, and if so, update the relevant documentation files and submit a pull request.
+            ## Input Revisions
+            - Current working branch is already checked out to `doc`.
+            - Compare range:
+              - If PREV_SHA is available: `git diff $PREV_SHA $MAIN_SHA`
+              - Else fallback to last commit: `git show $MAIN_SHA`
 
-            ## Step-by-Step Workflow
-            1.  **Analyze the Change:**
-                - Do not just read the commit message. Your primary source of truth is the code itself.
-                - Perform a `git diff` on the last commit to the `main` branch.
-                - Analyze the diff to understand the full scope and nature of the changes.
+            ## Workflow
+            1) Analyze the diff of main as above. Derive user-facing impact only.
+            2) If documentation needs updates, modify files under:
+               - README.md
+               - docs/**/*.md
+               - examples/**
+               Keep tone and format consistent.
+            3) Do not create or switch branches. Commit on the existing `doc` branch only.
+            4) If nothing user-facing changed, exit without committing.
 
-            2.  **Impact Assessment:**
-                - Based on the code changes, determine if documentation needs to be updated. Look for:
-                  - **New Features:** Does the `README.md` or `docs/` need a new section?
-                  - **Breaking Changes:** Are there changes to function signatures, API endpoints, or configuration that must be documented?
-                  - **Behavioral Changes:** Does a feature now work differently? Update examples and descriptions.
-                  - **Dependency Changes:** Were new environment variables or dependencies added? Update the setup guide.
-                - If the changes are purely internal refactoring, bug fixes with no user-facing impact, or CI/CD updates, no documentation update is needed.
+            ## Commit Rules
+            - Stage changes: `git add -A`
+            - Commit message: `docs: sync with ${MAIN_SHA}`
+            - Do not modify source code outside documentation.
+            - Do not push; the workflow will handle pushing and PR.
 
-            3.  **Update Documentation:**
-                - If an update is needed, identify all relevant files (`README.md`, `docs/**/*.md`, `examples/*`, etc.).
-                - Modify the files to reflect the code changes accurately.
-                - **Maintain Consistency:** Adhere strictly to the existing style, tone, and formatting of the documentation.
-                - Ensure all code examples are correct and up-to-date.
+            ## Guardrails
+            - No secrets.
+            - Keep diffs minimal and accurate.
+            - If unsure, skip.
 
-            4.  **Create Pull Request:**
-                - If you made changes, create a new branch: `git checkout -b iflow/docs-update-for-${{ github.sha }}`
-                - Commit your changes: `git commit -am "docs: Synchronize documentation with commit ${{ github.sha }}"`
-                - Push the new branch.
-                - Create a pull request.
-                  - **Title:** `docs: Synchronize documentation with recent changes`
-                  - **Body:**
-                    - A link to the commit that triggered the update.
-                    - A summary of the code changes that necessitated the documentation update.
-                    - A list of the documentation files that were changed.
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "docs: synchronize documentation with ${{ env.MAIN_SHA }}"
+          fi
+          # Jika tidak ada perubahan, commit di atas akan gagal dan blok di atas tidak jalan.
+          git push origin doc
 
-            ## Strict Rules
-            - **Code is Truth:** Base your analysis on the `git diff`, not just the commit message.
-            - **Clarity and Accuracy:** The documentation must be clear, concise, and perfectly reflect the code's behavior.
-            - **No Code Changes:** Your role is to write documentation only. Do not modify any source code.
-            - **No Action if Unnecessary:** If no documentation update is required, do nothing. The workflow should complete silently.
+      - name: Open or update PR doc -> main
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Cek PR existing dari 'doc' ke 'main'
+          PR_NUMBER=$(gh pr list --head doc --base main --state open --json number --jq '.[0].number')
+          BODY=$'This PR keeps documentation in sync with recent changes.\n\n- Trigger commit: '"${{ env.COMMIT_URL }}"$'\n- Compared range: '"${{ env.PREV_SHA:-N/A }} .. ${{ env.MAIN_SHA }}"$'\n\nFiles under README.md, docs/**, examples/** may be updated.'
+
+          if [[ -z "${PR_NUMBER}" ]]; then
+            gh pr create \
+              --head doc \
+              --base main \
+              --title "docs: Synchronize documentation with recent changes" \
+              --body "$BODY"
+          else
+            # Update body agar selalu refer ke commit terbaru
+            gh pr edit "$PR_NUMBER" --body "$BODY"
+            echo "Updated existing PR #$PR_NUMBER"
+          fi
 
   notify_failure:
     if: always() && (failure() || cancelled())
