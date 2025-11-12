@@ -36,6 +36,16 @@ These workflows run automatically on relevant events. For manual triggering:
 Workflows use the following secrets:
 - `GH_TOKEN`: GitHub token for API access
 - `IFLOW_API_KEY`: iFlow API key for AI operations
+
+## Permissions
+
+The iFlow Orchestrator requires the following permissions to function properly:
+- `actions: write` for workflow management
+- `contents: write` for branch/PR operations
+- `issues: write` for issue management
+- `pull-requests: write` for PR operations
+- `security-events: write` for code scanning
+- `workflows: write` for CI/CD workflow updates
 # Free VPS Research
 
 This repository automatically researches and updates a list of free VPS offers using Google Gemini.
