@@ -22,19 +22,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
+
+          git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Pastikan history main terbaru ada
+          # Pastikan main terbaru
           git fetch origin main --depth=2
-          MAIN_SHA=$(git rev-list origin/main -n 1)
-          PREV_SHA=$(git rev-list origin/main -n 2 | tail -n1 || echo "")
+          MAIN_SHA="$(git rev-parse origin/main || true)"
+          PREV_SHA="$(git rev-list origin/main -n 2 | tail -n1 || true)"
 
           # Buat atau update branch 'doc'
           if git ls-remote --exit-code --heads origin doc >/dev/null 2>&1; then
             git fetch origin doc:refs/remotes/origin/doc
             git checkout -B doc origin/doc
-            # Selaraskan dengan main agar basis terkini
+            # Selaraskan basis dengan main
             git merge --no-edit origin/main || true
           else
             git checkout -b doc origin/main
@@ -44,8 +45,8 @@ jobs:
           {
             echo "MAIN_SHA=$MAIN_SHA"
             echo "PREV_SHA=$PREV_SHA"
-            echo "COMMIT_URL=${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
             echo "REPOSITORY=${{ github.repository }}"
+            echo "COMMIT_URL=${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
           } >> "$GITHUB_ENV"
 
       - name: Update Documentation with iFlow
@@ -63,27 +64,26 @@ jobs:
             ## Persona
             You are an expert AI Technical Writer. Analyze code changes in main and update documentation on the current branch (doc).
 
-            ## Input Revisions
-            - Current working branch is already checked out to `doc`.
-            - Compare range:
-              - If PREV_SHA is available: `git diff $PREV_SHA $MAIN_SHA`
-              - Else fallback to last commit: `git show $MAIN_SHA`
+            ## Inputs
+            - The current working branch is already checked out to `doc`.
+            - Compare using:
+              - If PREV_SHA exists: `git diff $PREV_SHA $MAIN_SHA`
+              - Else: `git show $MAIN_SHA`
 
             ## Workflow
-            1) Analyze the diff of main as above. Derive user-facing impact only.
+            1) Analyze the diff from main. Focus on user-facing impact only.
             2) If documentation needs updates, modify files under:
                - README.md
                - docs/**/*.md
                - examples/**
-               Keep tone and format consistent.
-            3) Do not create or switch branches. Commit on the existing `doc` branch only.
+               Maintain existing style and formatting.
+            3) Do not create or switch branches. Commit on the current `doc` branch only.
             4) If nothing user-facing changed, exit without committing.
 
             ## Commit Rules
-            - Stage changes: `git add -A`
-            - Commit message: `docs: sync with ${MAIN_SHA}`
-            - Do not modify source code outside documentation.
-            - Do not push; the workflow will handle pushing and PR.
+            - Stage: `git add -A`
+            - Commit message: `docs: sync with $MAIN_SHA`
+            - Never modify source code outside documentation.
 
             ## Guardrails
             - No secrets.
@@ -93,11 +93,13 @@ jobs:
       - name: Commit and push if changed
         run: |
           set -euo pipefail
-          if ! git diff --quiet; then
+          if [[ -n "$(git status --porcelain)" ]]; then
             git add -A
-            git commit -m "docs: synchronize documentation with ${{ env.MAIN_SHA }}"
+            git commit -m "docs: synchronize documentation with $MAIN_SHA"
+            echo "DOC_CHANGED=true" >> "$GITHUB_ENV"
+          else
+            echo "DOC_CHANGED=false" >> "$GITHUB_ENV"
           fi
-          # Jika tidak ada perubahan, commit di atas akan gagal dan blok di atas tidak jalan.
           git push origin doc
 
       - name: Open or update PR doc -> main
@@ -105,18 +107,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -euo pipefail
-          # Cek PR existing dari 'doc' ke 'main'
-          PR_NUMBER=$(gh pr list --head doc --base main --state open --json number --jq '.[0].number')
-          BODY=$'This PR keeps documentation in sync with recent changes.\n\n- Trigger commit: '"${{ env.COMMIT_URL }}"$'\n- Compared range: '"${{ env.PREV_SHA:-N/A }} .. ${{ env.MAIN_SHA }}"$'\n\nFiles under README.md, docs/**, examples/** may be updated.'
 
-          if [[ -z "${PR_NUMBER}" ]]; then
-            gh pr create \
-              --head doc \
-              --base main \
-              --title "docs: Synchronize documentation with recent changes" \
-              --body "$BODY"
+          # Cari PR terbuka dari 'doc' ke 'main'
+          PR_NUMBER="$(gh pr list --head doc --base main --state open --json number --jq '.[0].number' || true)"
+
+          # Siapkan body dengan ekspansi shell, bukan ekspresi GHA
+          BODY=$(cat <<'EOF'
+This PR keeps documentation in sync with recent changes.
+
+- Trigger commit: ${COMMIT_URL}
+- Compared range: ${PREV_SHA:-N/A} .. ${MAIN_SHA}
+
+Files under README.md, docs/**, examples/** may be updated.
+EOF
+)
+          BODY="$(eval "echo \"$BODY\"")"
+
+          if [[ -z "${PR_NUMBER}" || "${PR_NUMBER}" == "null" ]]; then
+            if [[ "${DOC_CHANGED}" == "true" ]]; then
+              gh pr create \
+                --head doc \
+                --base main \
+                --title "docs: Synchronize documentation with recent changes" \
+                --body "$BODY"
+            else
+              echo "No doc changes and no existing PR. Skipping PR creation."
+            fi
           else
-            # Update body agar selalu refer ke commit terbaru
             gh pr edit "$PR_NUMBER" --body "$BODY"
             echo "Updated existing PR #$PR_NUMBER"
           fi
