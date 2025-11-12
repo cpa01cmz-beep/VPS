@@ -1,0 +1,54 @@
+# Configuration for the GitHub Labeler action
+# This file defines rules for automatically applying labels to PRs based on file paths
+
+# CI/CD related changes
+automation:
+  - .github/workflows/*
+  - .github/dependabot.yml
+  - .github/labeler.yml
+
+# Documentation changes
+documentation:
+  - README.md
+  - docs/**
+  - .github/PULL_REQUEST_TEMPLATE.md
+  - .github/ISSUE_TEMPLATE/**
+  - **/*.md
+
+# Code changes
+code:
+  - src/**
+  - lib/**
+  - "**/*.js"
+  - "**/*.ts"
+  - "**/*.py"
+  - "**/*.go"
+  - "**/*.rs"
+  - "**/*.java"
+  - "**/*.cpp"
+  - "**/*.h"
+
+# Test changes
+tests:
+  - tests/**
+  - "**/*.test.*"
+  - "**/*.spec.*"
+
+# Configuration changes
+configuration:
+  - .github/**
+  - .gitignore
+  - .vscode/**
+  - .idea/**
+  - package.json
+  - package-lock.json
+  - requirements.txt
+  - pyproject.toml
+  - Cargo.toml
+  - go.mod
+  - go.sum
+
+# Security related changes
+security:
+  - .github/SECURITY.md
+  - .github/CODEOWNERS
