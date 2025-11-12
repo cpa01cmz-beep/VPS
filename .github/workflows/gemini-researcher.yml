@@ -57,7 +57,7 @@ PROMPT
           prompt: |
             You are an analyst. Read the following markdown report and produce:
             1) Concrete improvements to the research method (queries, sources, verification)
-            2) Suggested prompt variants (2‑3, ≤50 words each) for next run
+            2) Suggested prompt variants for next run (2‑3, ≤50 words each)
             3) Proposed automated test (shell/regex) to detect low‑quality output.
             Report content:
             $(cat ${{ env.OUTPUT_FILE }})
@@ -109,21 +109,3 @@ PROMPT
             - Updated `${{ env.SELF_IMPROVE_FILE }}`
             Please review and merge if acceptable.
           labels: automated, bot
-
-      - name: Create Self‑Improve Issue
-        if: steps.commit_push.outputs.changed == 'true'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            const md = fs.readFileSync('${{ env.SELF_IMPROVE_FILE }}','utf8');
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: "[Auto] Self‑Improve suggestions – free‑VPS research",
-              body: `Generated suggestions:\n\n${md}`,
-              labels: ["self‑improve","automated"]
-            });
-
-      - name: Done
-        run: echo "Workflow completed."
