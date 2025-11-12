@@ -1,0 +1,28 @@
+# iFlow Configuration
+
+# Define the default branch for the repository
+default_branch: main
+
+# Define the branch prefix for iFlow branches
+branch_prefix: iflow/
+
+# Define the label for iFlow-related issues and pull requests
+label: orchestration
+
+# Define the schedule for the repository maintenance workflow
+maintenance_schedule: "0 2 * * 1-5"  # Every weekday at 2:00 AM UTC
+
+# Define the schedule for the repository intelligence workflow
+intelijen_schedule: "0 3 * * 1"  # Every Monday at 3:00 AM UTC
+
+# Define the schedule for the free VPS research workflow
+research_schedule: "0 3 * * 1"  # Every Monday at 3:00 AM UTC
+
+# Define the command to run tests
+test_command: python -m pytest tests/
+
+# Define the command to run linters
+lint_command: ruff check .
+
+# Define the command to run formatters
+format_command: ruff format .
