@@ -60,3 +60,6 @@ This repository automatically researches and updates a list of free VPS offers u
 
 If you'd like to contribute to this project, please submit a pull request with your changes. You can help improve the workflow, add new features, or fix issues. Check the project's issue tracker for ideas on how to contribute.
 
+We have templates for [bug reports](.github/ISSUE_TEMPLATE/bug_report.md), [feature requests](.github/ISSUE_TEMPLATE/feature_request.md), and [documentation updates](.github/ISSUE_TEMPLATE/documentation.md) to help you create issues. For pull requests, please use our [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
+
+For security-related concerns, please refer to our [security policy](.github/SECURITY.md).
