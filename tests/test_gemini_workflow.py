@@ -16,7 +16,7 @@ class TestGeminiWorkflow(unittest.TestCase):
         
         # Check if required keys exist
         self.assertIn('name', workflow)
-        self.assertIn('on', workflow)
+        self.assertIn(True, workflow)  # 'on' is a reserved word in YAML and gets converted to True
         self.assertIn('jobs', workflow)
         
         # Check if research job exists
