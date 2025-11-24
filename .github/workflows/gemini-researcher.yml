@@ -15,7 +15,7 @@ jobs:
       OUTPUT_FILE: free-vps.md
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Run Gemini CLI
         id: run_research
